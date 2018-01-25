@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -13,57 +14,64 @@ namespace connsearch
     // Using https://github.com/ReneNyffenegger/Oracle-SQL-developer-password-decryptor/blob/master/Decrypt_V4.java as reference point
     class Program
     {
+        static void usage()
+        {
+            Console.WriteLine("Usage: connsearch [ls|password connection_name]");
+        }
         static void Main(string[] args)
         {
-            // TODO: read real path from $HOME/.sqldeveloper
-            string pathToConnections = "/home/trent/.sqldeveloper/system17.2.0.188.1159/o.jdeveloper.db.connection/connections.xml";
-            string pathToPreferences = "/home/trent/.sqldeveloper/system17.2.0.188.1159/o.sqldeveloper/product-preferences.xml";
+            SqlDevInstance mySqlDev = new SqlDevInstance();
 
-            XDocument sqlDevCOnnectionsDoc = XDocument.Load(pathToConnections);
-
-            // Create a list of connections, so that we can return any useful
-            // data to the user
-            var SqlDevConnectionList = (
-                from connection in sqlDevCOnnectionsDoc.Descendants("RefAddresses")
-                select new Connection()
-                {
-                    Password =
-                        (from connectinSetting in connection.Descendants("StringRefAddr")
-                        where (string) connectinSetting.Attribute("addrType") == "password"
-                        select (string) connectinSetting.Element("Contents")).FirstOrDefault(),
-                    ConnectionName =
-                        (from connectinSetting in connection.Descendants("StringRefAddr")
-                        where (string) connectinSetting.Attribute("addrType") == "ConnName"
-                        select (string) connectinSetting.Element("Contents")).FirstOrDefault()
-                }
-            ).ToList();
-
-            // Determine the system id of the current installation so we can
-            // successfully decrypt the password stored in the connections file
-            XmlDocument SqlDevSystemPrefsDoc = new XmlDocument();
-            SqlDevSystemPrefsDoc.Load(pathToPreferences);
-            XmlNamespaceManager systemPrefsNsManager = new XmlNamespaceManager(SqlDevSystemPrefsDoc.NameTable);
-            systemPrefsNsManager.AddNamespace("ide", "http://xmlns.oracle.com/ide/hash");
-
-            var sqlDevSystemId =
-                SqlDevSystemPrefsDoc
-                    .DocumentElement
-                    .SelectSingleNode("/ide:preferences/value[@n='db.system.id']/@v", systemPrefsNsManager)
-                    .Value;
-
-            PasswordDecryptService decryptor = new PasswordDecryptService(sqlDevSystemId);
-
-            string decryptedPassword;
-
-            foreach (var conn in SqlDevConnectionList)
+            if (args.Length == 0)
             {
-                if (!String.IsNullOrEmpty(conn.Password))
+                Console.Error.WriteLine("Invalid number of arguments.");
+                usage();
+
+                Environment.Exit(1);
+            }
+            else if (args[0] == "about")
+            {
+                Console.WriteLine("connsearch: Find Oracle SQL Developer connections and their associated passwords");
+                usage();
+            }
+            else if (args[0] == "ls")
+            {
+                List<Connection> allConnections = mySqlDev.GetAllConnections();
+                foreach(Connection c in allConnections)
                 {
-                    decryptor.EncryptedPassword = conn.Password;
-                    decryptedPassword = decryptor.GetDecryptedPassword();
-                    Console.WriteLine(String.Format("Connection {0} has encrypted password {1} which is really {2}", conn.ConnectionName, conn.Password, decryptedPassword));
+                    Console.WriteLine(c.ConnectionName);
                 }
             }
+            else if (args[0] == "password" && args.Length == 2)
+            {
+                bool connectionNameFound = false;
+                List<Connection> allConnections = mySqlDev.GetAllConnections();
+                foreach(Connection c in allConnections)
+                {
+                    if (c.ConnectionName == args[1])
+                    {
+                        connectionNameFound = true;
+                        PasswordDecryptService decryptor = new PasswordDecryptService(mySqlDev.SystemId);
+                        decryptor.EncryptedPassword = c.Password;
+                        string decryptedPassword = decryptor.GetDecryptedPassword();
+
+                        Console.WriteLine("{0}: {1}/{2}", c.ConnectionName, c.Schema, decryptedPassword);
+                    }
+
+                }
+
+                if (!connectionNameFound)
+                {
+                    Console.Error.WriteLine(String.Format("Could not find connection named \"{0}\"", args[1]));
+                }
+            }
+            else
+            {
+                Console.WriteLine("Unknown input received");
+
+                Environment.Exit(1);
+            }
+
         }
     }
 }
